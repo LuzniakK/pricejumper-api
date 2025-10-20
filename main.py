@@ -53,6 +53,9 @@ class ListItem(SQLModel, table=True):
 class UserCreate(BaseModel):
     email: str
     password: str
+    
+class ListItemCreate(BaseModel):
+    product_name: str
 
 class Token(BaseModel):
     access_token: str
@@ -102,6 +105,10 @@ def register_user(user_data: UserCreate, session: Session = Depends(get_session)
     new_user = User(email=user_data.email, hashed_password=hashed_password)
     session.add(new_user)
     session.commit()
+    # Po rejestracji, stwórz dla użytkownika jego pierwszą listę zakupów
+    new_list = ShoppingList(name="Moja lista zakupów", owner_id=new_user.id)
+    session.add(new_list)
+    session.commit()
     session.refresh(new_user)
     return new_user
 
@@ -117,3 +124,27 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
 @app.get("/users/me", response_model=User)
 async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
     return current_user
+
+# --- NOWE/PRZYWRÓCONE ENDPOINTY DO OBSŁUGI LIST ---
+@app.get("/shopping-lists/my-list", response_model=List[ListItem])
+async def get_my_shopping_list_items(current_user: Annotated[User, Depends(get_current_user)], session: Session = Depends(get_session)):
+    # Znajdź pierwszą listę należącą do zalogowanego użytkownika
+    shopping_list = session.exec(select(ShoppingList).where(ShoppingList.owner_id == current_user.id)).first()
+    if not shopping_list:
+        raise HTTPException(status_code=404, detail="Shopping list not found")
+    
+    # Pobierz wszystkie pozycje z tej listy
+    items = session.exec(select(ListItem).where(ListItem.list_id == shopping_list.id)).all()
+    return items
+
+@app.post("/shopping-lists/my-list/items", response_model=ListItem)
+async def add_item_to_my_list(item_data: ListItemCreate, current_user: Annotated[User, Depends(get_current_user)], session: Session = Depends(get_session)):
+    shopping_list = session.exec(select(ShoppingList).where(ShoppingList.owner_id == current_user.id)).first()
+    if not shopping_list:
+        raise HTTPException(status_code=404, detail="Shopping list not found")
+        
+    new_item = ListItem(product_name=item_data.product_name, list_id=shopping_list.id)
+    session.add(new_item)
+    session.commit()
+    session.refresh(new_item)
+    return new_item
