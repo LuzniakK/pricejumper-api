@@ -10,7 +10,6 @@ from contextlib import asynccontextmanager
 
 class ShoppingList(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    # Lista jest teraz powiązana z ID urządzenia, a nie użytkownika
     device_id: str = Field(unique=True, index=True)
 
 class ListItem(SQLModel, table=True):
@@ -23,7 +22,8 @@ class ListItemCreate(BaseModel):
 
 # --- 2. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
 
-DATABASE_URL = "sqlite:///database.db"
+# ZMIANA NAZWY BAZY DANYCH
+DATABASE_URL = "sqlite:///database_v2.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 def create_db_and_tables():
@@ -44,7 +44,6 @@ def get_session():
 
 # --- 3. ENDPOINTS API ---
 
-# Funkcja pomocnicza do znalezienia lub stworzenia listy dla danego urządzenia
 def get_or_create_list(device_id: str, session: Session) -> ShoppingList:
     shopping_list = session.exec(select(ShoppingList).where(ShoppingList.device_id == device_id)).first()
     if not shopping_list:
