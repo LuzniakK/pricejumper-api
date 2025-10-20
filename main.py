@@ -1,36 +1,64 @@
 # main.py
-
-from typing import List, Optional
+from typing import List, Optional, Annotated
 from fastapi import FastAPI, HTTPException, Depends
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel, create_engine, Session, select
 from contextlib import asynccontextmanager
+from passlib.context import CryptContext
+from jose import JWTError, jwt
+from datetime import datetime, timedelta, timezone
 
-# --- 1. MODELE DANYCH ---
+# --- 1. KONFIGURACJA BEZPIECZEŃSTWA ---
+SECRET_KEY = "TWOJ_BARDZO_TAJNY_KLUCZ_KTORY_POWINIENES_ZMIENIC"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60
 
-class Uzytkownik(SQLModel, table=True):
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
+# --- 2. FUNKCJE POMOCNICZE DO BEZPIECZEŃSTWA ---
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+# --- 3. MODELE DANYCH ---
+class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    email: str = Field(index=True, unique=True)
-    nazwa: str
+    email: str = Field(unique=True, index=True)
+    hashed_password: str
 
-class ListaZakupow(SQLModel, table=True):
+class ShoppingList(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    nazwa: str
-    id_uzytkownika: int = Field(foreign_key="uzytkownik.id")
+    name: str
+    owner_id: int = Field(foreign_key="user.id")
 
-class PozycjaNaLiscie(SQLModel, table=True):
+class ListItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    nazwa_produktu: str
-    id_listy: int = Field(foreign_key="listazakupow.id")
+    product_name: str
+    list_id: int = Field(foreign_key="shoppinglist.id")
 
-class PozycjaRequest(BaseModel):
-    nazwa_produktu: str
+class UserCreate(BaseModel):
+    email: str
+    password: str
 
-class ShoppingListRequest(BaseModel):
-    products: list[str]
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
-# --- 2. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
-
+# --- 4. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
 DATABASE_URL = "sqlite:///database.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
@@ -39,101 +67,53 @@ def create_db_and_tables():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Aplikacja startuje, tworzę tabele w bazie danych...")
     create_db_and_tables()
-    
-    with Session(engine) as session:
-        user_check = session.exec(select(Uzytkownik)).first()
-        list_check = session.exec(select(ListaZakupow)).first()
-
-        if not user_check and not list_check:
-            print("Baza danych jest pusta. Tworzę domyślnego użytkownika i listę...")
-            domyslny_uzytkownik = Uzytkownik(id=1, email="test@example.com", nazwa="Test User")
-            domyslna_lista = ListaZakupow(id=1, nazwa="Moja Pierwsza Lista", id_uzytkownika=1)
-            
-            session.add(domyslny_uzytkownik)
-            session.add(domyslna_lista)
-            
-            session.commit()
-            print("Domyślne dane stworzone.")
-            
     yield
-    print("Aplikacja się zamyka.")
 
-app = FastAPI(title="CenoSkoczek API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(lifespan=lifespan)
 
 def get_session():
     with Session(engine) as session:
         yield session
 
-# --- 3. ENDPOINTS API ---
-
-@app.get("/")
-def read_root():
-    return {"Wiadomość": "Witaj w API aplikacji CenoSkoczek!"}
-
-@app.post("/uzytkownicy/", response_model=Uzytkownik)
-def create_user(user: Uzytkownik, session: Session = Depends(get_session)):
-    existing_user = session.exec(select(Uzytkownik).where(Uzytkownik.email == user.email)).first()
-    if existing_user:
-        raise HTTPException(status_code=400, detail="Użytkownik z tym adresem email już istnieje.")
-    session.add(user)
-    session.commit()
-    session.refresh(user)
+# --- 5. FUNKCJA POBIERANIA AKTUALNEGO UŻYTKOWNIKA ---
+async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], session: Session = Depends(get_session)):
+    credentials_exception = HTTPException(status_code=401, detail="Could not validate credentials", headers={"WWW-Authenticate": "Bearer"})
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = session.exec(select(User).where(User.email == email)).first()
+    if user is None:
+        raise credentials_exception
     return user
 
-@app.post("/listy-zakupow/", response_model=ListaZakupow)
-def create_shopping_list(lista: ListaZakupow, session: Session = Depends(get_session)):
-    user = session.get(Uzytkownik, lista.id_uzytkownika)
-    if not user:
-        raise HTTPException(status_code=404, detail="Nie znaleziono użytkownika o podanym ID.")
-    session.add(lista)
+# --- 6. ENDPOINTS API ---
+@app.post("/register", response_model=User)
+def register_user(user_data: UserCreate, session: Session = Depends(get_session)):
+    db_user = session.exec(select(User).where(User.email == user_data.email)).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    hashed_password = get_password_hash(user_data.password)
+    new_user = User(email=user_data.email, hashed_password=hashed_password)
+    session.add(new_user)
     session.commit()
-    session.refresh(lista)
-    return lista
+    session.refresh(new_user)
+    return new_user
 
-@app.get("/listy-zakupow/{id_listy}/pozycje/", response_model=List[PozycjaNaLiscie])
-def get_items_from_list(id_listy: int, session: Session = Depends(get_session)):
-    pozycje = session.exec(select(PozycjaNaLiscie).where(PozycjaNaLiscie.id_listy == id_listy)).all()
-    return pozycje
+@app.post("/token", response_model=Token)
+async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm, Depends()], session: Session = Depends(get_session)):
+    user = session.exec(select(User).where(User.email == form_data.username)).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password", headers={"WWW-Authenticate": "Bearer"})
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(data={"sub": user.email}, expires_delta=access_token_expires)
+    return {"access_token": access_token, "token_type": "bearer"}
 
-@app.post("/listy-zakupow/{id_listy}/pozycje/", response_model=PozycjaNaLiscie)
-def add_item_to_list(id_listy: int, request: PozycjaRequest, session: Session = Depends(get_session)):
-    lista = session.get(ListaZakupow, id_listy)
-    if not lista:
-        raise HTTPException(status_code=404, detail="Nie znaleziono listy o podanym ID.")
-    
-    nowa_pozycja = PozycjaNaLiscie(nazwa_produktu=request.nazwa_produktu, id_listy=id_listy)
-    
-    session.add(nowa_pozycja)
-    session.commit()
-    session.refresh(nowa_pozycja)
-    return nowa_pozycja
-
-def scrape_price_from_store(product_name: str, store_name: str) -> float | None:
-    prices = {
-        "Biedronka": {"mleko": 3.50, "chleb": 4.00, "jajka": 8.00},
-        "Lidl": {"mleko": 3.60, "chleb": 3.90, "jajka": 8.50},
-    }
-    return prices.get(store_name, {}).get(product_name.lower())
-
-@app.post("/porownaj-ceny/")
-def compare_prices(request: ShoppingListRequest):
-    stores = ["Biedronka", "Lidl"]
-    results = {}
-    for store in stores:
-        total_cost = 0
-        found_products = 0
-        for product in request.products:
-            price = scrape_price_from_store(product, store)
-            if price is not None:
-                total_cost += price
-                found_products += 1
-        if found_products > 0:
-            results[store] = {
-                "total_cost": round(total_cost, 2),
-                "found_products": found_products,
-                "total_products": len(request.products)
-            }
-    sorted_results = sorted(results.items(), key=lambda item: item[1]['total_cost'])
-    return dict(sorted_results)
+@app.get("/users/me", response_model=User)
+async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
+    return current_user
