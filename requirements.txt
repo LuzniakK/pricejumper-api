@@ -1,13 +1,10 @@
 # requirements.txt
-
 fastapi
 uvicorn
 sqlmodel
 gunicorn
 requests
 beautifulsoup4
-
-# Dodajemy biblioteki potrzebne do bezpiecznego logowania (Krok 5)
-passlib[bcrypt]
-python-jose[cryptography]
+passlib
+python-jose
 python-multipart
