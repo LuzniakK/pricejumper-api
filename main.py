@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from sqlmodel import Field, SQLModel, create_engine, Session, select
 from contextlib import asynccontextmanager
 
-# --- 1. MODELE DANYCH (DEFINICJA STRUKTURY BAZY DANYCH) ---
+# --- 1. MODELE DANYCH ---
 
 class Uzytkownik(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -23,19 +23,15 @@ class PozycjaNaLiscie(SQLModel, table=True):
     nazwa_produktu: str
     id_listy: int = Field(foreign_key="listazakupow.id")
 
-# Model dla przychodzącego żądania dodania produktu
 class PozycjaRequest(BaseModel):
     nazwa_produktu: str
 
-# Model dla przychodzącego żądania porównania cen
 class ShoppingListRequest(BaseModel):
     products: list[str]
-
 
 # --- 2. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
 
 DATABASE_URL = "sqlite:///database.db"
-# connect_args jest ważny, by unikać błędów przy pracy z bazą SQLite w FastAPI
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 def create_db_and_tables():
@@ -43,36 +39,32 @@ def create_db_and_tables():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Kod, który uruchomi się przy starcie serwera
     print("Aplikacja startuje, tworzę tabele w bazie danych...")
     create_db_and_tables()
     
-    # Tworzenie domyślnych danych, jeśli nie istnieją
     with Session(engine) as session:
         user_1 = session.get(Uzytkownik, 1)
         if not user_1:
             print("Tworzę domyślnego użytkownika i listę...")
             domyslny_uzytkownik = Uzytkownik(id=1, email="test@example.com", nazwa="Test User")
-            session.add(domyslny_uzytkownik)
             domyslna_lista = ListaZakupow(id=1, nazwa="Moja Pierwsza Lista", id_uzytkownika=1)
+            
+            session.add(domyslny_uzytkownik)
             session.add(domyslna_lista)
+            
             session.commit()
             print("Domyślne dane stworzone.")
             
     yield
-    # Kod, który mógłby uruchomić się przy zamykaniu serwera
     print("Aplikacja się zamyka.")
 
-# Inicjalizacja FastAPI z użyciem `lifespan`
 app = FastAPI(title="CenoSkoczek API", version="1.0.0", lifespan=lifespan)
 
-# Funkcja pomocnicza do zarządzania sesją z bazą danych
 def get_session():
     with Session(engine) as session:
         yield session
 
-
-# --- 3. ENDPOINTS API (PUNKTY DOSTĘPOWE) ---
+# --- 3. ENDPOINTS API ---
 
 @app.get("/")
 def read_root():
@@ -116,18 +108,16 @@ def add_item_to_list(id_listy: int, request: PozycjaRequest, session: Session = 
     session.refresh(nowa_pozycja)
     return nowa_pozycja
 
-# Atrapa (mock) funkcji do web scrapingu
 def scrape_price_from_store(product_name: str, store_name: str) -> float | None:
     prices = {
         "Biedronka": {"mleko": 3.50, "chleb": 4.00, "jajka": 8.00},
         "Lidl": {"mleko": 3.60, "chleb": 3.90, "jajka": 8.50},
-        "Auchan": {"mleko": 3.40, "chleb": 4.20, "jajka": 7.80}
     }
     return prices.get(store_name, {}).get(product_name.lower())
 
 @app.post("/porownaj-ceny/")
 def compare_prices(request: ShoppingListRequest):
-    stores = ["Biedronka", "Lidl", "Auchan"]
+    stores = ["Biedronka", "Lidl"]
     results = {}
     for store in stores:
         total_cost = 0
