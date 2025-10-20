@@ -20,10 +20,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 # --- 2. FUNKCJE POMOCNICZE DO BEZPIECZEŃSTWA ---
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
-
 def get_password_hash(password):
     return pwd_context.hash(password)
-
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
     if expires_delta:
@@ -53,10 +51,8 @@ class ListItem(SQLModel, table=True):
 class UserCreate(BaseModel):
     email: str
     password: str
-    
 class ListItemCreate(BaseModel):
     product_name: str
-
 class Token(BaseModel):
     access_token: str
     token_type: str
@@ -89,7 +85,6 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)], sessio
             raise credentials_exception
     except JWTError:
         raise credentials_exception
-    
     user = session.exec(select(User).where(User.email == email)).first()
     if user is None:
         raise credentials_exception
@@ -105,11 +100,11 @@ def register_user(user_data: UserCreate, session: Session = Depends(get_session)
     new_user = User(email=user_data.email, hashed_password=hashed_password)
     session.add(new_user)
     session.commit()
+    session.refresh(new_user)
     # Po rejestracji, stwórz dla użytkownika jego pierwszą listę zakupów
-    new_list = ShoppingList(name="Moja lista zakupów", owner_id=new_user.id)
+    new_list = ShoppingList(name=f"Lista zakupów {new_user.email}", owner_id=new_user.id)
     session.add(new_list)
     session.commit()
-    session.refresh(new_user)
     return new_user
 
 @app.post("/token", response_model=Token)
@@ -125,15 +120,16 @@ async def login_for_access_token(form_data: Annotated[OAuth2PasswordRequestForm,
 async def read_users_me(current_user: Annotated[User, Depends(get_current_user)]):
     return current_user
 
-# --- NOWE/PRZYWRÓCONE ENDPOINTY DO OBSŁUGI LIST ---
+# --- ENDPOINTY DO OBSŁUGI LIST ---
 @app.get("/shopping-lists/my-list", response_model=List[ListItem])
 async def get_my_shopping_list_items(current_user: Annotated[User, Depends(get_current_user)], session: Session = Depends(get_session)):
-    # Znajdź pierwszą listę należącą do zalogowanego użytkownika
     shopping_list = session.exec(select(ShoppingList).where(ShoppingList.owner_id == current_user.id)).first()
     if not shopping_list:
-        raise HTTPException(status_code=404, detail="Shopping list not found")
-    
-    # Pobierz wszystkie pozycje z tej listy
+        # Jeśli użytkownik nie ma listy, stwórz ją
+        shopping_list = ShoppingList(name=f"Lista zakupów {current_user.email}", owner_id=current_user.id)
+        session.add(shopping_list)
+        session.commit()
+        session.refresh(shopping_list)
     items = session.exec(select(ListItem).where(ListItem.list_id == shopping_list.id)).all()
     return items
 
@@ -141,8 +137,7 @@ async def get_my_shopping_list_items(current_user: Annotated[User, Depends(get_c
 async def add_item_to_my_list(item_data: ListItemCreate, current_user: Annotated[User, Depends(get_current_user)], session: Session = Depends(get_session)):
     shopping_list = session.exec(select(ShoppingList).where(ShoppingList.owner_id == current_user.id)).first()
     if not shopping_list:
-        raise HTTPException(status_code=404, detail="Shopping list not found")
-        
+        raise HTTPException(status_code=404, detail="Shopping list not found for user")
     new_item = ListItem(product_name=item_data.product_name, list_id=shopping_list.id)
     session.add(new_item)
     session.commit()
