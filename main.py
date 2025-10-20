@@ -43,9 +43,11 @@ async def lifespan(app: FastAPI):
     create_db_and_tables()
     
     with Session(engine) as session:
-        user_1 = session.get(Uzytkownik, 1)
-        if not user_1:
-            print("Tworzę domyślnego użytkownika i listę...")
+        user_check = session.exec(select(Uzytkownik)).first()
+        list_check = session.exec(select(ListaZakupow)).first()
+
+        if not user_check and not list_check:
+            print("Baza danych jest pusta. Tworzę domyślnego użytkownika i listę...")
             domyslny_uzytkownik = Uzytkownik(id=1, email="test@example.com", nazwa="Test User")
             domyslna_lista = ListaZakupow(id=1, nazwa="Moja Pierwsza Lista", id_uzytkownika=1)
             
