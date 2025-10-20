@@ -77,16 +77,23 @@ def create_shopping_list(lista: ListaZakupow, session: Session = Depends(get_ses
     return lista
 
 # Endpoint do dodawania produktu do listy
+class PozycjaRequest(BaseModel):
+    nazwa_produktu: str
+
+# Zaktualizuj definicję endpointu, by używał nowego modelu
 @app.post("/listy-zakupow/{id_listy}/pozycje/", response_model=PozycjaNaLiscie)
-def add_item_to_list(id_listy: int, pozycja: PozycjaNaLiscie, session: Session = Depends(get_session)):
+def add_item_to_list(id_listy: int, request: PozycjaRequest, session: Session = Depends(get_session)):
     lista = session.get(ListaZakupow, id_listy)
     if not lista:
         raise HTTPException(status_code=404, detail="Nie znaleziono listy o podanym ID.")
-    pozycja.id_listy = id_listy
-    session.add(pozycja)
+    
+    # Tworzymy nowy obiekt PozycjaNaLiscie na podstawie danych z requestu
+    nowa_pozycja = PozycjaNaLiscie(nazwa_produktu=request.nazwa_produktu, id_listy=id_listy)
+    
+    session.add(nowa_pozycja)
     session.commit()
-    session.refresh(pozycja)
-    return pozycja
+    session.refresh(nowa_pozycja)
+    return nowa_pozycja
 
 # Endpoint do pobierania produktów z listy
 @app.get("/listy-zakupow/{id_listy}/pozycje/", response_model=List[PozycjaNaLiscie])
