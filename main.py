@@ -124,8 +124,14 @@ def compare_prices(request: ComparisonRequest):
         found_products_count = 0
         
         for product in request.products:
-            # Użyj mapowania lub oryginalnej nazwy produktu
-            query = config["product_mapping"].get(product.lower(), product.replace(" ", "%20"))
+            product_lower = product.lower()
+            # --- ULEPSZONA LOGIKA DOPASOWANIA ---
+            query = product.replace(" ", "%20") # Domyślna wartość to po prostu nazwa produktu
+            for keyword, mapped_query in config["product_mapping"].items():
+                if keyword in product_lower:
+                    query = mapped_query
+                    break # Użyj pierwszego znalezionego dopasowania
+            
             price = scrape_price(query, config)
             if price:
                 total_cost += price
