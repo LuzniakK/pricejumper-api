@@ -1,12 +1,13 @@
 # main.py
 from typing import List, Optional, Dict
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, Depends
 from pydantic import BaseModel
 from sqlmodel import Field, SQLModel, create_engine, Session, select
 from contextlib import asynccontextmanager
 import requests
 from bs4 import BeautifulSoup
 import re
+import os
 
 # --- 1. MODELE DANYCH ---
 class ShoppingList(SQLModel, table=True):
@@ -43,6 +44,11 @@ def get_session():
         yield session
 
 # --- 3. LOGIKA WEB SCRAPINGU ---
+
+# --- POPRAWKA TUTAJ ---
+# Wczytujemy klucz ze zmiennej o nazwie "Scraper", którą ustawiłeś w Render
+SCRAPER_API_KEY = os.getenv("Scraper") 
+
 STORE_CONFIGS = {
     "Frisco.pl": {
         "search_url": "https://www.frisco.pl/szukaj/{query}",
@@ -51,19 +57,21 @@ STORE_CONFIGS = {
     },
     "Auchan Zakupy": {
         "search_url": "https://www.auchandirect.pl/auchan-pl/search/{query}",
-        "price_selector": "div[class*='-priceValue']",
+        "price_selector": "p[class*='ProductPrice']",
         "product_mapping": { "mleko": "mleko%20uht", "chleb": "chleb%20tradycyjny" }
     }
 }
 
-def scrape_price(product_query: str, config: dict) -> Optional[float]:
+def scrape_price_with_api(product_query: str, config: dict) -> Optional[float]:
+    if not SCRAPER_API_KEY:
+        print("--- BŁĄD: Brak klucza SCRAPER_API_KEY w zmiennych środowiskowych! ---")
+        return None
     try:
-        url = config["search_url"].format(query=product_query)
-        print(f"--- Scraping URL: {url} ---")
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        target_url = config["search_url"].format(query=product_query)
+        scraper_url = f"http://api.scraperapi.com?api_key={SCRAPER_API_KEY}&url={target_url}"
         
-        response = requests.get(url, headers=headers, timeout=10)
-        print(f"--- Status for {url}: {response.status_code} ---")
+        response = requests.get(scraper_url, timeout=45)
+        
         if response.status_code != 200:
             return None
 
@@ -72,17 +80,13 @@ def scrape_price(product_query: str, config: dict) -> Optional[float]:
         
         if price_element:
             price_text = price_element.get_text()
-            print(f"--- Found price text: '{price_text}' ---")
             match = re.search(r'(\d+[,.]\d{1,2})', price_text)
             if match:
                 price = float(match.group(1).replace(',', '.'))
-                print(f"--- Parsed price: {price} ---")
                 return price
-        else:
-            print(f"--- Price selector '{config['price_selector']}' not found on page ---")
         return None
     except Exception as e:
-        print(f"--- Scraping error for {config['search_url']}: {e} ---")
+        print(f"--- Scraping error: {e} ---")
         return None
 
 # --- 4. ENDPOINTS API ---
@@ -123,7 +127,7 @@ def compare_prices(request: ComparisonRequest):
                 if keyword in product_lower:
                     query = mapped_query
                     break
-            price = scrape_price(query, config)
+            price = scrape_price_with_api(query, config)
             if price:
                 total_cost += price
                 found_products_count += 1
@@ -133,6 +137,5 @@ def compare_prices(request: ComparisonRequest):
                 "total_cost": round(total_cost, 2),
                 "found_products": f"{found_products_count}/{len(request.products)}"
             }
-
     sorted_results = sorted(results.items(), key=lambda item: item[1]['total_cost'])
     return dict(sorted_results)
