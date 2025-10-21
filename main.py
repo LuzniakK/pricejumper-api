@@ -22,7 +22,6 @@ class ListItemCreate(BaseModel):
 
 # --- 2. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
 
-# ZMIANA NAZWY BAZY DANYCH
 DATABASE_URL = "sqlite:///database_v2.db"
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
