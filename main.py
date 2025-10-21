@@ -28,7 +28,8 @@ class ComparisonRequest(BaseModel):
 # --- 2. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
 
 DATABASE_URL = "sqlite:///database_v2.db"
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+# --- POPRAWKA TUTAJ: Dodajemy argument `connect_args` ---
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 15})
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)
@@ -44,49 +45,37 @@ def get_session():
     with Session(engine) as session:
         yield session
 
-# --- 3. KONFIGURACJA SKLEPÓW I LOGIKA SCRAPINGU ---
+# --- 3. LOGIKA WEB SCRAPINGU ---
 
 STORE_CONFIGS = {
     "Frisco.pl": {
         "search_url": "https://www.frisco.pl/szukaj/{query}",
         "price_selector": "div[data-qa^='final-price'] span.price",
-        "product_mapping": {
-            "mleko": "mleko%20łaciate",
-            "chleb": "chleb%20wiejski",
-        }
+        "product_mapping": { "mleko": "mleko%20łaciate", "chleb": "chleb%20wiejski" }
     },
     "Auchan Zakupy": {
         "search_url": "https://www.auchandirect.pl/auchan-pl/search/{query}",
         "price_selector": "div[class*='-priceValue']",
-        "product_mapping": {
-            "mleko": "mleko%20uht",
-            "chleb": "chleb%20tradycyjny",
-        }
+        "product_mapping": { "mleko": "mleko%20uht", "chleb": "chleb%20tradycyjny" }
     }
 }
 
 def scrape_price(product_query: str, config: dict) -> Optional[float]:
-    """Generyczna funkcja do scrapowania ceny ze sklepu na podstawie konfiguracji."""
     try:
         url = config["search_url"].format(query=product_query)
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
-        
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
-            print(f"Błąd {response.status_code} dla {url}")
             return None
-
         soup = BeautifulSoup(response.text, 'html.parser')
         price_element = soup.select_one(config["price_selector"])
-        
         if price_element:
             price_text = price_element.get_text()
             match = re.search(r'(\d+[,.]\d{1,2})', price_text)
             if match:
                 return float(match.group(1).replace(',', '.'))
         return None
-    except Exception as e:
-        print(f"Błąd scrapingu dla {config['search_url']}: {e}")
+    except Exception:
         return None
 
 # --- 4. ENDPOINTS API ---
@@ -118,30 +107,24 @@ def add_item_to_list(device_id: str, item_data: ListItemCreate, session: Session
 @app.post("/compare")
 def compare_prices(request: ComparisonRequest):
     results: Dict[str, dict] = {}
-    
     for store_name, config in STORE_CONFIGS.items():
         total_cost = 0.0
         found_products_count = 0
-        
         for product in request.products:
             product_lower = product.lower()
-            # --- ULEPSZONA LOGIKA DOPASOWANIA ---
-            query = product.replace(" ", "%20") # Domyślna wartość to po prostu nazwa produktu
+            query = product.replace(" ", "%20")
             for keyword, mapped_query in config["product_mapping"].items():
                 if keyword in product_lower:
                     query = mapped_query
-                    break # Użyj pierwszego znalezionego dopasowania
-            
+                    break
             price = scrape_price(query, config)
             if price:
                 total_cost += price
                 found_products_count += 1
-        
         if found_products_count > 0:
             results[store_name] = {
                 "total_cost": round(total_cost, 2),
                 "found_products": f"{found_products_count}/{len(request.products)}"
             }
-
     sorted_results = sorted(results.items(), key=lambda item: item[1]['total_cost'])
     return dict(sorted_results)
