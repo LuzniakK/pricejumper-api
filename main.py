@@ -9,7 +9,6 @@ from bs4 import BeautifulSoup
 import re
 
 # --- 1. MODELE DANYCH ---
-
 class ShoppingList(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     device_id: str = Field(unique=True, index=True)
@@ -26,9 +25,7 @@ class ComparisonRequest(BaseModel):
     products: List[str]
 
 # --- 2. KONFIGURACJA APLIKACJI I BAZY DANYCH ---
-
 DATABASE_URL = "sqlite:///database_v2.db"
-# --- POPRAWKA TUTAJ: Dodajemy argument `connect_args` ---
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False, "timeout": 15})
 
 def create_db_and_tables():
@@ -46,7 +43,6 @@ def get_session():
         yield session
 
 # --- 3. LOGIKA WEB SCRAPINGU ---
-
 STORE_CONFIGS = {
     "Frisco.pl": {
         "search_url": "https://www.frisco.pl/szukaj/{query}",
@@ -63,23 +59,33 @@ STORE_CONFIGS = {
 def scrape_price(product_query: str, config: dict) -> Optional[float]:
     try:
         url = config["search_url"].format(query=product_query)
+        print(f"--- Scraping URL: {url} ---")
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+        
         response = requests.get(url, headers=headers, timeout=10)
+        print(f"--- Status for {url}: {response.status_code} ---")
         if response.status_code != 200:
             return None
+
         soup = BeautifulSoup(response.text, 'html.parser')
         price_element = soup.select_one(config["price_selector"])
+        
         if price_element:
             price_text = price_element.get_text()
+            print(f"--- Found price text: '{price_text}' ---")
             match = re.search(r'(\d+[,.]\d{1,2})', price_text)
             if match:
-                return float(match.group(1).replace(',', '.'))
+                price = float(match.group(1).replace(',', '.'))
+                print(f"--- Parsed price: {price} ---")
+                return price
+        else:
+            print(f"--- Price selector '{config['price_selector']}' not found on page ---")
         return None
-    except Exception:
+    except Exception as e:
+        print(f"--- Scraping error for {config['search_url']}: {e} ---")
         return None
 
 # --- 4. ENDPOINTS API ---
-
 def get_or_create_list(device_id: str, session: Session) -> ShoppingList:
     shopping_list = session.exec(select(ShoppingList).where(ShoppingList.device_id == device_id)).first()
     if not shopping_list:
@@ -121,10 +127,12 @@ def compare_prices(request: ComparisonRequest):
             if price:
                 total_cost += price
                 found_products_count += 1
+        
         if found_products_count > 0:
             results[store_name] = {
                 "total_cost": round(total_cost, 2),
                 "found_products": f"{found_products_count}/{len(request.products)}"
             }
+
     sorted_results = sorted(results.items(), key=lambda item: item[1]['total_cost'])
     return dict(sorted_results)
